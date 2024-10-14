@@ -19,13 +19,13 @@ from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiv
 from rest_framework.views import APIView
 from xmodule.modulestore.django import modulestore
 
-from .tasks import submit_calculate_students_features_csv
+from .tasks import submit_task_make_reports
 
 
 logger = logging.getLogger(__name__)
 
 
-class CMMEduSeguimientoStudentProfile(APIView):
+class CMMEduSeguimientoMakeReports(APIView):
 
     authentication_classes = (
         JwtAuthentication,
@@ -37,7 +37,7 @@ class CMMEduSeguimientoStudentProfile(APIView):
 
     @transaction.non_atomic_requests
     def dispatch(self, args, **kwargs):
-        return super(CMMEduSeguimientoStudentProfile, self).dispatch(args, **kwargs)
+        return super(CMMEduSeguimientoMakeReports, self).dispatch(args, **kwargs)
 
     def post(self, request):
         try:
@@ -95,7 +95,7 @@ class CMMEduSeguimientoStudentProfile(APIView):
         query_features_names['country'] = _('Country')
 
         try:
-            task = submit_calculate_students_features_csv(request, course_key, query_features)
+            task = submit_task_make_reports(request, course_key, query_features)
             success_status = 'El reporte Perfil de estudiantes está siendo creado.'
             return JsonResponse({"status": success_status, 'task_id': task.task_id})
         except AlreadyRunningError:
