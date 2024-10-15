@@ -152,6 +152,8 @@ def build_student_data(user_id, course_key, usage_key_str_list, filter_types=Non
 
     student_data_keys = set()
 
+    printing = True
+
     with store.bulk_operations(course_key):
         for usage_key in usage_keys:
             if max_count is not None and max_count <= 0:
@@ -168,6 +170,21 @@ def build_student_data(user_id, course_key, usage_key_str_list, filter_types=Non
                     continue
 
                 block = store.get_item(block_key)
+                if printing:
+                    #if block.display_name == "Iterative XBlock":
+                    fields = block.fields
+
+                    # Flag to track when we find "source_file"
+                    found_source_file = False
+
+                    # Iterate over the dictionary and print key-value pairs after "source_file"
+                    print("-------------------------------------------------")
+                    print(f"Block: {block.display_name}")
+                    for key, value in fields.items():
+                        if found_source_file:
+                            print(f"{key}: {block.fields[key].read_from(block)}")
+                        if key == "source_file":
+                            found_source_file = True
                 generated_report_data = defaultdict(list)
 
                 # Blocks can implement the generate_report_data method to provide their own
