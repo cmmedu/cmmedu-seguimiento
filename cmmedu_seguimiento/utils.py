@@ -6,17 +6,23 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from eventtracking import tracker
 from lms.djangoapps.course_blocks.api import get_course_blocks
+from lms.djangoapps.courseware.courses import get_course_by_id
 from lms.djangoapps.courseware.user_state_client import DjangoXBlockUserStateClient
 from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, list_problem_responses
 from lms.djangoapps.instructor_task.tasks_helper.runner import TaskProgress
+import logging
 from opaque_keys.edx.keys import UsageKey
 from openassessment.data import OraAggregateData
+from openedx.core.djangoapps.course_groups.cohorts import is_course_cohorted
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from pytz import UTC
 from time import time
 from xmodule.modulestore.django import modulestore
 
 from .models import JsonReportStore
 
+
+logger = logging.getLogger(__name__)
 
 REPORT_REQUESTED_EVENT_NAME = u'edx.instructor.report.requested'
 
@@ -29,6 +35,7 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     """
     start_time = time()
     start_date = datetime.now(UTC)
+
     enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id)
     problem_locations = "block-v1:{}+type@course+block@course".format(course_id)
     task_progress = TaskProgress(action_name, enrolled_students.count(), start_time)
@@ -38,9 +45,23 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     report_data = {}
 
     # Student profile
+    course = get_course_by_id(course_id)
+    query_features = list(configuration_helpers.get_value('student_profile_download_fields', []))
+    if not query_features:
+        query_features = [
+            'id', 'username', 'name', 'email', 'language', 'location',
+            'year_of_birth', 'gender', 'level_of_education', 'mailing_address',
+            'goals', 'enrollment_mode', 'verification_status',
+            'last_login', 'date_joined',
+        ]
+    if is_course_cohorted(course.id):
+        query_features.append('cohort')
+    if course.teams_enabled:
+        query_features.append('team')
+    query_features.append('city')
+    query_features.append('country')
     if settings.UCHILEEDXLOGIN_TASK_RUN_ENABLE:
-        task_input["student_features"].insert(0,'run')
-    query_features = task_input["student_features"]
+        query_features.insert(0,'run')
     report_data["student_profile"] = enrolled_students_features(course_id, query_features)
 
     # ORA data
@@ -62,6 +83,7 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
         'step': 'Report ready.',
         'report_name': report_name
     }
+
     return task_progress.update_task_state(extra_meta=current_step)
 
 
@@ -70,6 +92,8 @@ def build_blocks_data(user_id, course_key, usage_key_str):
     usage_key = UsageKey.from_string(usage_key_str).map_into_course(course_key)
     user = get_user_model().objects.get(pk=user_id)
     store = modulestore()
+    user_state_client = DjangoXBlockUserStateClient()
+    max_count = settings.FEATURES.get('MAX_PROBLEM_RESPONSES_COUNT')
     with store.bulk_operations(course_key):
         course_blocks = get_course_blocks(user, usage_key)
         for title, path, block_key in build_problem_list(course_blocks, usage_key):
@@ -99,7 +123,25 @@ def build_blocks_data(user_id, course_key, usage_key_str):
                     found_source_file = True
 
             # Add students data
-            # DATA HERE
+            generated_report_data = defaultdict(list)
+            if hasattr(block, 'generate_report_data'):
+                try:
+                    user_state_iterator = user_state_client.iter_all_for_block(block_key)
+                    for username, state in block.generate_report_data(user_state_iterator, max_count):
+                        generated_report_data[username].append(state)
+                except NotImplementedError:
+                    pass
+            responses = []
+            for response in list_problem_responses(course_key, block_key, max_count):
+                user_states = generated_report_data.get(response['username'])
+                if user_states:
+                    for user_state in user_states:
+                        user_response = response.copy()
+                        user_response.update(user_state)
+                        responses.append(user_response)
+                else:
+                    responses.append(response)
+            block_item["responses"] = responses
 
             # Append the block data to the list
             blocks_data.append(block_item)
@@ -135,94 +177,6 @@ def tracker_emit(report_name):
     tracker.emit(REPORT_REQUESTED_EVENT_NAME, {"report_type": report_name, })
 
 
-def build_student_data(user_id, course_key, usage_key_str, filter_types=None):
-    """
-    Generate a list of problem responses for all problem under the
-    ``problem_location`` root.
-    Arguments:
-        user_id (int): The user id for the user generating the report
-        course_key (CourseKey): The ``CourseKey`` for the course whose report
-            is being generated
-        usage_key_str_list (List[str]): The generated report will include these
-            blocks and their child blocks.
-        filter_types (List[str]): The report generator will only include data for
-            block types in this list.
-    Returns:
-            Tuple[List[Dict], List[str]]: Returns a list of dictionaries
-            containing the student data which will be included in the
-            final csv, and the features/keys to include in that CSV.
-    """
-    usage_key = UsageKey.from_string(usage_key_str).map_into_course(course_key)
-    user = get_user_model().objects.get(pk=user_id)
-
-    student_data = []
-    max_count = settings.FEATURES.get('MAX_PROBLEM_RESPONSES_COUNT')
-
-    store = modulestore()
-    user_state_client = DjangoXBlockUserStateClient()
-
-    student_data_keys = set()
-
-    with store.bulk_operations(course_key):
-        course_blocks = get_course_blocks(user, usage_key)
-        base_path = build_block_base_path(store.get_item(usage_key))
-        for title, path, block_key in build_problem_list(course_blocks, usage_key):
-            # Chapter and sequential blocks are filtered out since they include state
-            # which isn't useful for this report.
-            if block_key.block_type in ('sequential', 'chapter'):
-                continue
-
-            if filter_types is not None and block_key.block_type not in filter_types:
-                continue
-
-            block = store.get_item(block_key)
-            generated_report_data = defaultdict(list)
-
-            # Blocks can implement the generate_report_data method to provide their own
-            # human-readable formatting for user state.
-            if hasattr(block, 'generate_report_data'):
-                try:
-                    user_state_iterator = user_state_client.iter_all_for_block(block_key)
-                    for username, state in block.generate_report_data(user_state_iterator, max_count):
-                        generated_report_data[username].append(state)
-                except NotImplementedError:
-                    pass
-
-            responses = []
-
-            for response in list_problem_responses(course_key, block_key, max_count):
-                response['title'] = title
-                # A human-readable location for the current block
-                response['location'] = ' > '.join(base_path + path)
-                # A machine-friendly location for the current block
-                response['block_key'] = str(block_key)
-                # A block that has a single state per user can contain multiple responses
-                # within the same state.
-                user_states = generated_report_data.get(response['username'])
-                if user_states:
-                    # For each response in the block, copy over the basic data like the
-                    # title, location, block_key and state, and add in the responses
-                    for user_state in user_states:
-                        user_response = response.copy()
-                        user_response.update(user_state)
-                        student_data_keys = student_data_keys.union(list(user_state.keys()))
-                        responses.append(user_response)
-                else:
-                    responses.append(response)
-
-            student_data += responses
-
-    # Keep the keys in a useful order, starting with username, title and location,
-    # then the columns returned by the xblock report generator in sorted order and
-    # finally end with the more machine friendly block_key and state.
-    student_data_keys_list = (
-        ['username', 'title', 'location'] +
-        sorted(student_data_keys) +
-        ['block_key', 'state']
-    )
-
-    return student_data, student_data_keys_list
-
 def build_problem_list(course_blocks, root, path=None):
     """
     Generate a tuple of display names, block location paths and block keys
@@ -246,20 +200,3 @@ def build_problem_list(course_blocks, root, path=None):
         name = course_blocks.get_xblock_field(block, 'display_name') or block.block_type
         for result in build_problem_list(course_blocks, block, path + [name]):
             yield result
-
-
-def build_block_base_path(block):
-    """
-    Return the display names of the blocks that lie above the supplied block in hierarchy.
-
-    Arguments:
-        block: a single block
-
-    Returns:
-        List[str]: a list of display names of blocks starting from the root block (Course)
-    """
-    path = []
-    while block.parent:
-        block = block.get_parent()
-        path.append(block.display_name)
-    return list(reversed(path))
