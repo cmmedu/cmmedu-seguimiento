@@ -15,13 +15,13 @@ from openedx.core.djangoapps.site_configuration import helpers as configuration_
 from openedx.core.lib.api.authentication import BearerAuthenticationAllowInactiveUser
 from rest_framework.views import APIView
 
-from .tasks import submit_task_make_reports
+from .tasks import submit_task_make_report
 
 
 logger = logging.getLogger(__name__)
 
 
-class CMMEduSeguimientoMakeReports(APIView):
+class CMMEduSeguimientoMakeReport(APIView):
 
     authentication_classes = (
         JwtAuthentication,
@@ -34,7 +34,7 @@ class CMMEduSeguimientoMakeReports(APIView):
 
     @transaction.non_atomic_requests
     def dispatch(self, args, **kwargs):
-        return super(CMMEduSeguimientoMakeReports, self).dispatch(args, **kwargs)
+        return super(CMMEduSeguimientoMakeReport, self).dispatch(args, **kwargs)
 
 
     def post(self, request):
@@ -70,8 +70,8 @@ class CMMEduSeguimientoMakeReports(APIView):
             'student_features': query_features,
         }
         try:
-            task = submit_task_make_reports(request, course_key, task_input)
-            success_status = 'Se ha iniciado la generación de reportes.'
+            task = submit_task_make_report(request, course_key, task_input)
+            success_status = 'Se ha iniciado la generación del reporte.'
             return JsonResponse({"status": success_status, 'task_id': task.task_id})
         except AlreadyRunningError:
             return JsonResponse({"status": "Esta tarea ya está en progreso."})

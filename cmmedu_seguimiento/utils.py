@@ -8,8 +8,6 @@ from eventtracking import tracker
 from lms.djangoapps.course_blocks.api import get_course_blocks
 from lms.djangoapps.courseware.user_state_client import DjangoXBlockUserStateClient
 from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, list_problem_responses
-from lms.djangoapps.instructor_analytics.csvs import format_dictlist
-from lms.djangoapps.instructor_task.models import ReportStore
 from lms.djangoapps.instructor_task.tasks_helper.runner import TaskProgress
 from opaque_keys.edx.keys import UsageKey
 from openassessment.data import OraAggregateData
@@ -17,15 +15,17 @@ from pytz import UTC
 from time import time
 from xmodule.modulestore.django import modulestore
 
+from .models import JsonReportStore
+
 
 REPORT_REQUESTED_EVENT_NAME = u'edx.instructor.report.requested'
 
 
-def make_reports(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
+def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
     """
-    For a given `course_id`, generate CSV files containing profile
-    information, student state and ORA data for all students that are 
-    enrolled, and store using a `ReportStore`.
+    For a given `course_id`, generate a JSON file containing profile
+    information, ORA data, blocks data and student state for all students 
+    that are enrolled, and store using a `JsonReportStore`.
     """
     start_time = time()
     start_date = datetime.now(UTC)
@@ -33,63 +33,34 @@ def make_reports(_xmodule_instance_args, _entry_id, course_id, task_input, actio
     problem_locations = "block-v1:{}+type@course+block@course".format(course_id)
     task_progress = TaskProgress(action_name, enrolled_students.count(), start_time)
 
-    current_step = {'step': 'Generating student profile...'}
+    current_step = {'step': 'Generating report data...'}
     task_progress.update_task_state(extra_meta=current_step)
+    report_data = {}
+
+    # Student profile
     if settings.UCHILEEDXLOGIN_TASK_RUN_ENABLE:
         task_input["student_features"].insert(0,'run')
     query_features = task_input["student_features"]
-    student_profile = enrolled_students_features(course_id, query_features)
-    header, rows = format_dictlist(student_profile, query_features)
-    task_progress.attempted = task_progress.succeeded = len(rows)
-    task_progress.skipped = task_progress.total - task_progress.attempted
-    rows.insert(0, header)
+    report_data["student_profile"] = enrolled_students_features(course_id, query_features)
 
-    current_step = {'step': 'Uploading student profile CSV...'}
-    task_progress.update_task_state(extra_meta=current_step)
-    student_profile_name = upload_csv_to_report_store(rows, 'student_profile_info', course_id, start_date)
-    
-    current_step = {'step': 'Generating ORA data...'}
-    task_progress.update_task_state(extra_meta=current_step)
+    # ORA data
     header, datarows = OraAggregateData.collect_ora2_data(course_id)
-    rows = [header] + [row for row in datarows]
+    report_data["ora_data"] = [dict(zip(header, row)) for row in datarows]
 
-    current_step = {'step': 'Uploading ORA data CSV...'}
-    task_progress.update_task_state(extra_meta=current_step)
-    ora_data_name = upload_csv_to_report_store(rows, 'ORA_data', course_id, start_date)
-
-    current_step = {'step': 'Generating blocks data...'}
-    task_progress.update_task_state(extra_meta=current_step)
-    blocks_data = build_blocks_data(
+    # Blocks and student state
+    report_data["blocks"] = build_blocks_data(
         user_id=task_input["user_id"],
         course_key=course_id,
         usage_key_str=problem_locations,
     )
-    print(blocks_data)
 
-    current_step = {'step': 'Generating student state...'}
+    current_step = {'step': 'Uploading report data JSON...'}
     task_progress.update_task_state(extra_meta=current_step)
-    filter_types = None
-    student_data, student_data_keys = build_student_data(
-        user_id=task_input["user_id"],
-        course_key=course_id,
-        usage_key_str=problem_locations,
-        filter_types=filter_types,
-    )
-    for data in student_data:
-        for key in student_data_keys:
-            data.setdefault(key, '')
-    header, rows = format_dictlist(student_data, student_data_keys)
-    rows.insert(0, header)
-
-    current_step = {'step': 'Uploading student state CSV...'}
-    task_progress.update_task_state(extra_meta=current_step)
-    student_state_name = upload_csv_to_report_store(rows, 'student_state', course_id, start_date)
+    report_name = upload_json_to_report_store(report_data, 'report_data', course_id, start_date)
 
     current_step = {
-        'step': 'Reports ready.',
-        'student_profile_name': student_profile_name,
-        'ora_data_name': ora_data_name,
-        'student_state_name': student_state_name
+        'step': 'Report ready.',
+        'report_name': report_name
     }
     return task_progress.update_task_state(extra_meta=current_step)
 
@@ -103,7 +74,7 @@ def build_blocks_data(user_id, course_key, usage_key_str):
         course_blocks = get_course_blocks(user, usage_key)
         for title, path, block_key in build_problem_list(course_blocks, usage_key):
 
-            # Chapter, sequential and vertical blocks are filtered out since they include state
+            # Course, chapter, sequential and vertical blocks are filtered out since they include state
             # which isn't useful for this report.
             if block_key.block_type in ('course', 'sequential', 'chapter', 'vertical'):
                 continue
@@ -115,7 +86,7 @@ def build_blocks_data(user_id, course_key, usage_key_str):
                 "path": path,
                 "display_name": block.display_name,
                 "block_type": block_key.block_type,
-
+                "block_id": str(block_key).split('@')[-1]
             }
 
             # Iterate over the dictionary and store key-value pairs after "source_file", depending of the block type
@@ -135,32 +106,25 @@ def build_blocks_data(user_id, course_key, usage_key_str):
 
     return blocks_data
 
-def upload_csv_to_report_store(rows, csv_name, course_id, timestamp, config_name='GRADES_DOWNLOAD'):
+
+def upload_json_to_report_store(data, json_name, course_id, timestamp, config_name='GRADES_DOWNLOAD'):
     """
-    Upload data as a CSV using ReportStore.
+    Upload data as a JSON using ReportStore.
 
     Arguments:
-        rows: CSV data in the following format (first column may be a
-            header):
-            [
-                [row1_colum1, row1_colum2, ...],
-                ...
-            ]
-        csv_name: Name of the resulting CSV
+        data: JSON data
+        json_name: Name of the resulting JSON
         course_id: ID of the course
-
-    Returns:
-        report_name: string - Name of the generated report
     """
-    report_store = ReportStore.from_config(config_name)
-    report_name = u"{course_prefix}_{csv_name}_{timestamp_str}.csv".format(
+    report_store = JsonReportStore.from_config(config_name)
+    report_name = u"{course_prefix}_{json_name}_{timestamp_str}.json".format(
         course_prefix=course_filename_prefix_generator(course_id),
-        csv_name=csv_name,
+        json_name=json_name,
         timestamp_str=timestamp.strftime("%Y-%m-%d-%H%M")
     )
 
-    report_store.store_rows(course_id, report_name, rows)
-    tracker_emit(csv_name)
+    report_store.store_json(course_id, report_name, data)
+    tracker_emit(json_name)
     return report_name
 
 

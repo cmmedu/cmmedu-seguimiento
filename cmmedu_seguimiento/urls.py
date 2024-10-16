@@ -4,5 +4,5 @@ from .views import *
 
 
 urlpatterns = [
-    url('cmmedu_seguimiento_make_reports/', csrf_exempt(CMMEduSeguimientoMakeReports.as_view()), name='cmmedu_seguimiento_make_reports')
+    url('cmmedu_seguimiento_make_report/', csrf_exempt(CMMEduSeguimientoMakeReport.as_view()), name='cmmedu_seguimiento_make_report')
 ]
