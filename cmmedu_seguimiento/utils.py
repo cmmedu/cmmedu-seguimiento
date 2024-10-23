@@ -19,6 +19,8 @@ from pytz import UTC
 from time import time
 from xmodule.modulestore.django import modulestore
 
+import sys
+
 from .models import JsonReportStore
 
 
@@ -42,7 +44,7 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
 
     current_step = {'step': 'Generating report data...'}
     task_progress.update_task_state(extra_meta=current_step)
-    report_data = {}
+    logger.info("Started data generation for course %s.", course_id)
 
     # Student profile
     course = get_course_by_id(course_id)
@@ -62,33 +64,37 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     query_features.append('country')
     if settings.UCHILEEDXLOGIN_TASK_RUN_ENABLE:
         query_features.insert(0,'run')
-    report_data["student_profile"] = enrolled_students_features(course_id, query_features)
+    student_profile_data = enrolled_students_features(course_id, query_features)
+    student_profile_report_name = upload_json_to_report_store(student_profile_data, 'student_profile', course_id, start_date)
+    logger.info("Stored student profile data.")
 
     # ORA data
     header, datarows = OraAggregateData.collect_ora2_data(course_id)
-    report_data["ora_data"] = [dict(zip(header, row)) for row in datarows]
+    ora_data = [dict(zip(header, row)) for row in datarows]
+    ora_report_name = upload_json_to_report_store(ora_data, 'ora_data', course_id, start_date)
+    logger.info("Stored ORA data.")
 
     # Blocks and student state
-    report_data["blocks"] = build_blocks_data(
+    report_names = build_blocks_data(
         user_id=task_input["user_id"],
         course_key=course_id,
         usage_key_str=problem_locations,
+        start_date=start_date
     )
-
-    current_step = {'step': 'Uploading report data JSON...'}
-    task_progress.update_task_state(extra_meta=current_step)
-    report_name = upload_json_to_report_store(report_data, 'report_data', course_id, start_date)
 
     current_step = {
         'step': 'Report ready.',
-        'report_name': report_name
+        'reports': {
+            'student_profile': student_profile_report_name,
+            'ora_data': ora_report_name,
+            'blocks_data': report_names
+        }
     }
 
     return task_progress.update_task_state(extra_meta=current_step)
 
 
-def build_blocks_data(user_id, course_key, usage_key_str):
-    blocks_data = []
+def build_blocks_data(user_id, course_key, usage_key_str, start_date):
     usage_key = UsageKey.from_string(usage_key_str).map_into_course(course_key)
     user = get_user_model().objects.get(pk=user_id)
     store = modulestore()
@@ -96,12 +102,28 @@ def build_blocks_data(user_id, course_key, usage_key_str):
     max_count = settings.FEATURES.get('MAX_PROBLEM_RESPONSES_COUNT')
     with store.bulk_operations(course_key):
         course_blocks = get_course_blocks(user, usage_key)
+        current_section = ""
+        block_count = 0
+        response_count = 0
+        reports = []
+        blocks_data = []
         for title, path, block_key in build_problem_list(course_blocks, usage_key):
 
             # Course, chapter, sequential and vertical blocks are filtered out since they include state
             # which isn't useful for this report.
             if block_key.block_type in ('course', 'sequential', 'chapter', 'vertical'):
                 continue
+
+            new_section = path[1]
+            if new_section != current_section:
+                if current_section != "":
+                    index = len(reports) + 1
+                    reports.append(upload_json_to_report_store(blocks_data, 'report_data_' + str(index), course_key, start_date))
+                    blocks_data = []
+                    logger.info("Stored %d blocks with %d responses for section %s.", block_count, response_count, current_section)
+                    block_count = 0
+                    response_count = 0
+                current_section = new_section
 
             # Store basic data from the block
             block = store.get_item(block_key)
@@ -141,12 +163,18 @@ def build_blocks_data(user_id, course_key, usage_key_str):
                         responses.append(user_response)
                 else:
                     responses.append(response)
+                response_count += 1
             block_item["responses"] = responses
 
             # Append the block data to the list
             blocks_data.append(block_item)
+            block_count += 1
 
-    return blocks_data
+        index = len(reports) + 1
+        reports.append(upload_json_to_report_store(blocks_data, 'report_data_' + str(index), course_key, start_date))
+        logger.info("Stored %d blocks with %d responses for section %s.", block_count, response_count, current_section)
+
+    return reports
 
 
 def upload_json_to_report_store(data, json_name, course_id, timestamp, config_name='GRADES_DOWNLOAD'):

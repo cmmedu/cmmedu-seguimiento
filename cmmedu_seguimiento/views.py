@@ -5,6 +5,7 @@ from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthenticat
 from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser
 import json
 from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
+from lms.djangoapps.instructor_task.models import InstructorTask
 import logging
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import CourseKey
@@ -78,12 +79,43 @@ class CMMEduSeguimientoGetReport(APIView):
             key = CourseKey.from_string(course_key)
         except InvalidKeyError:
             return HttpResponseBadRequest("Invalid course_key")
-        report_store = JsonReportStore.from_config(config_name='GRADES_DOWNLOAD')
-        reports = [url for name, url in report_store.links_for(key) if ".json" in name and "report_data" in name]
-        if len(reports) > 0:
-            url = max(reports)
-            timestamp = url.split("_report_data_")[-1].split(".json")[0]
-            return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "timestamp": timestamp, "report_url": max(reports)})
+        course_tasks = InstructorTask.objects.filter(
+            task_type='cmmedu_seguimiento_report',
+            course_id=course_key
+        ).order_by('-created').all()
+        if not course_tasks:
+            return JsonResponse({"status": 0, "msg": "No hay tareas de reportes asociadas a este curso."})
+        latest_task = course_tasks[0]
+        if latest_task.task_state == 'PROGRESS':
+            return JsonResponse({"status": 0, "msg": "La tarea de reportes aún no está lista."})
+        elif latest_task.task_state == 'FAILED':
+            return JsonResponse({"status": 0, "msg": "La tarea de reportes ha fallado."})
+        elif latest_task.task_state == 'SUCCESS':
+            task_output = json.loads(latest_task.task_output)
+            logger.info("Task output: %s", task_output)
+            try:
+                report_names = task_output.get('reports')
+                student_profile_report_name = report_names.get('student_profile')
+                ora_report_name = report_names.get('ora_data')
+                block_report_names = report_names.get('blocks_data')
+            except:
+                return JsonResponse({"status": 0, "msg": "Formato de output de tarea inválido."})
+            report_store = JsonReportStore.from_config(config_name='GRADES_DOWNLOAD')
+            output = {
+                'student_profile': None,
+                'ora_data': None,
+                'blocks_data': {},
+                'task_started': latest_task.created.isoformat(),
+                'task_finished': latest_task.updated.isoformat(),
+                'task_duration_seconds': (latest_task.updated - latest_task.created).total_seconds()
+            }
+            for name, url in report_store.links_for(key):
+                if name == student_profile_report_name:
+                    output['student_profile'] = url
+                elif name == ora_report_name:
+                    output['ora_data'] = url
+                elif name in block_report_names:
+                    output['blocks_data'][name.split("report_data_")[1].split("_")[0]] = url
+            return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "output": output})
         else:
-            return JsonResponse({"status": 0, "msg": "No se ha encontrado el reporte."})
-
+            return JsonResponse({"status": 0, "msg": "Estado de la tarea desconocido."})
