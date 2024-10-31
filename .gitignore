@@ -132,3 +132,4 @@ dmypy.json
 # openedx test files
 test_root/
 setup.cfg
+local_test/

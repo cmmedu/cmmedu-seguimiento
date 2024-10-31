@@ -88,8 +88,8 @@ class CMMEduSeguimientoGetReport(APIView):
         latest_task = course_tasks[0]
         if latest_task.task_state == 'PROGRESS':
             return JsonResponse({"status": 0, "msg": "La tarea de reportes aún no está lista."})
-        elif latest_task.task_state == 'FAILED':
-            return JsonResponse({"status": 0, "msg": "La tarea de reportes ha fallado."})
+        elif latest_task.task_state == 'FAILURE':
+            return JsonResponse({"status": 0, "msg": "La tarea de reportes ha fallado.", "task_error": latest_task.task_output})
         elif latest_task.task_state == 'SUCCESS':
             task_output = json.loads(latest_task.task_output)
             logger.info("Task output: %s", task_output)
@@ -119,4 +119,4 @@ class CMMEduSeguimientoGetReport(APIView):
                     output['blocks_data'][name.split("report_data_")[1].split("_")[0]] = url
             return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "output": output})
         else:
-            return JsonResponse({"status": 0, "msg": "Estado de la tarea desconocido."})
+            return JsonResponse({"status": 0, "msg": "Estado de la tarea desconocido.", "task_state": latest_task.task_state})
