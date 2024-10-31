@@ -27,8 +27,6 @@ class TestCMMEduSeguimiento(UrlResetMixin, ModuleStoreTestCase):
     def setUp(self):
         super(TestCMMEduSeguimiento, self).setUp()
 
-        # Create OAuth credentials
-
         # Create a course
         self.course1 = CourseFactory.create(org='mss', course='100', display_name='Sample course 1')
 
@@ -65,4 +63,15 @@ class TestCMMEduSeguimiento(UrlResetMixin, ModuleStoreTestCase):
                     course_id=self.course1.id,
                     module_state_key=item.location
                 )
-        
+    
+
+    def test_endpoints_oauth(self):
+        """
+        Test that the endpoints require OAuth.
+        """
+        client = Client()
+        response = client.get(reverse('cmmedu_seguimiento:make_report'))
+        self.assertEqual(response.status_code, 401)
+        response = client.get(reverse('cmmedu_seguimiento:get_report'))
+        self.assertEqual(response.status_code, 401)
+
