@@ -70,8 +70,8 @@ class TestCMMEduSeguimiento(UrlResetMixin, ModuleStoreTestCase):
         Test that the endpoints require OAuth.
         """
         client = Client()
-        response = client.get(reverse('cmmedu_seguimiento:make_report'))
+        response = client.post(reverse('cmmedu_seguimiento:cmmedu_seguimiento_make_report'))
         self.assertEqual(response.status_code, 401)
-        response = client.get(reverse('cmmedu_seguimiento:get_report'))
+        response = client.post(reverse('cmmedu_seguimiento:cmmedu_seguimiento_get_report'))
         self.assertEqual(response.status_code, 401)
 
