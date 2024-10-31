@@ -3,11 +3,13 @@ from datetime import timedelta, datetime
 from django.conf import settings
 from django.core.files.base import ContentFile
 import hashlib
+import io
 import json
 import logging
 from openedx.core.storage import get_storage
 import os.path
-from six import text_type, PY2
+from six import text_type
+import tarfile
 
 logger = logging.getLogger(__name__)
 
@@ -89,33 +91,29 @@ class DjangoStorageJsonReportStore(JsonReportStore):
             getattr(settings, config_name).get('STORAGE_KWARGS'),
         )
 
-    def store(self, course_id, filename, buff):
+    def store(self, course_id, filename, buff_contents):
         """
-        Store the contents of `buff` in a directory determined by hashing
-        `course_id`, and name the file `filename`. `buff` can be any file-like
-        object, ready to be read from the beginning.
+        Store the `buff_contents` (raw bytes) in a `.tar.gz` archive named `filename`
+        and save it in a directory based on `course_id`.
         """
         path = self.path_to(course_id, filename)
-        if not PY2:
-            buff_contents = buff.read()
-
-            if not isinstance(buff_contents, bytes):
-                buff_contents = buff_contents.encode('utf-8')
-
-            buff = ContentFile(buff_contents)
-
-        self.storage.save(path, buff)
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
+            tarinfo = tarfile.TarInfo(name=f"{filename}.json".replace(".tar.gz", ""))
+            tarinfo.size = len(buff_contents)
+            tar.addfile(tarinfo, io.BytesIO(buff_contents))
+        tar_buffer.seek(0)
+        tar_content = ContentFile(tar_buffer.getvalue())
+        self.storage.save(path, tar_content)
 
 
     def store_json(self, course_id, filename, data):
         """
-        Given a course_id, filename, and data (a Python dict or list), 
-        write the data to the storage backend in JSON format.
+        Given a course_id, filename, and data (a Python dict or list),
+        write the data to the storage backend in JSON format inside a `.tar.gz` file.
         """
         json_data = json.dumps(data, ensure_ascii=False, indent=4, cls=JsonReportEncoder)
-        output_buffer = ContentFile(json_data)
-        self.store(course_id, filename, output_buffer)
-
+        self.store(course_id, filename, json_data.encode('utf-8'))
 
     def links_for(self, course_id):
         """

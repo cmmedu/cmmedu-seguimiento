@@ -187,7 +187,7 @@ def upload_json_to_report_store(data, json_name, course_id, timestamp, config_na
         course_id: ID of the course
     """
     report_store = JsonReportStore.from_config(config_name)
-    report_name = u"{course_prefix}_{json_name}_{timestamp_str}.json".format(
+    report_name = u"{course_prefix}_{json_name}_{timestamp_str}.tar.gz".format(
         course_prefix=course_filename_prefix_generator(course_id),
         json_name=json_name,
         timestamp_str=timestamp.strftime("%Y-%m-%d-%H%M")
