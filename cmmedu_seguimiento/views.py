@@ -105,6 +105,7 @@ class CMMEduSeguimientoGetReport(APIView):
                 'student_profile': None,
                 'ora_data': None,
                 'blocks_data': {},
+                'task_id': latest_task.task_id,
                 'task_started': latest_task.created.isoformat(),
                 'task_finished': latest_task.updated.isoformat(),
                 'task_duration_seconds': (latest_task.updated - latest_task.created).total_seconds()
