@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="cmmedu_seguimiento",
-    version="0.1.1",
+    version="1.0.0",
     author="Vicente Daie Pinilla",
     author_email="vdaiep@gmail.com",
     description=".",
