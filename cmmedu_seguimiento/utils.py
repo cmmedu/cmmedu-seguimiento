@@ -7,8 +7,9 @@ from django.contrib.auth import get_user_model
 from eventtracking import tracker
 from lms.djangoapps.course_blocks.api import get_course_blocks
 from lms.djangoapps.courseware.courses import get_course_by_id
+from lms.djangoapps.courseware.models import StudentModule
 from lms.djangoapps.courseware.user_state_client import DjangoXBlockUserStateClient
-from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, list_problem_responses
+from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, get_response_state
 from lms.djangoapps.instructor_task.tasks_helper.runner import TaskProgress
 import logging
 from opaque_keys.edx.keys import UsageKey
@@ -228,3 +229,42 @@ def build_problem_list(course_blocks, root, path=None):
         name = course_blocks.get_xblock_field(block, 'display_name') or block.block_type
         for result in build_problem_list(course_blocks, block, path + [name]):
             yield result
+
+
+def list_problem_responses(course_key, problem_location, limit_responses=None):
+    """
+    Return responses to a given problem as a dict.
+
+    list_problem_responses(course_key, problem_location)
+
+    would return [
+        {'username': u'user1', 'timestamp': u'...', 'state': u'...'},
+        {'username': u'user2', 'timestamp': u'...', 'state': u'...'},
+        {'username': u'user3', 'timestamp': u'...', 'state': u'...'},
+    ]
+
+    where `state` represents a student's response to the problem
+    identified by `problem_location`.
+    """
+    if isinstance(problem_location, UsageKey):
+        problem_key = problem_location
+    else:
+        problem_key = UsageKey.from_string(problem_location)
+    run = problem_key.run
+    if not run:
+        problem_key = UsageKey.from_string(problem_location).map_into_course(course_key)
+    if problem_key.course_key != course_key:
+        return []
+
+    smdat = StudentModule.objects.filter(
+        course_id=course_key,
+        module_state_key=problem_key
+    )
+    smdat = smdat.order_by('student')
+    if limit_responses is not None:
+        smdat = smdat[:limit_responses]
+
+    return [
+        {'username': response.student.username, 'timestamp': response.created, 'state': get_response_state(response)}
+        for response in smdat
+    ]
