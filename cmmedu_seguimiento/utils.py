@@ -109,12 +109,8 @@ def build_blocks_data(user_id, course_key, usage_key_str, start_date):
         reports = []
         blocks_data = []
         for title, path, block_key in build_problem_list(course_blocks, usage_key):
-
-            # Course, chapter, sequential and vertical blocks are filtered out since they include state
-            # which isn't useful for this report.
-            if block_key.block_type in ('course', 'sequential', 'chapter', 'vertical'):
+            if len(path) < 2:
                 continue
-
             new_section = path[1]
             if new_section != current_section:
                 if current_section != "":
@@ -125,51 +121,64 @@ def build_blocks_data(user_id, course_key, usage_key_str, start_date):
                     block_count = 0
                     response_count = 0
                 current_section = new_section
+            if block_key.block_type in ('sequential', 'chapter', 'vertical'):
+                block_item = {
+                    "path": path,
+                    "block_type": block_key.block_type,
+                    "block_id": str(block_key).split('@')[-1],
+                    "is_structural_item": True
+                }
+                blocks_data.append(block_item)
+                continue
+            elif block_key.block_type == 'course':
+                continue
+            else:
+                
+                # Store basic data from the block
+                block = store.get_item(block_key)
+                block_item = {
+                    "title": title,
+                    "path": path,
+                    "display_name": block.display_name,
+                    "block_type": block_key.block_type,
+                    "block_id": str(block_key).split('@')[-1],
+                    "is_structural_item": False
+                }
 
-            # Store basic data from the block
-            block = store.get_item(block_key)
-            block_item = {
-                "title": title,
-                "path": path,
-                "display_name": block.display_name,
-                "block_type": block_key.block_type,
-                "block_id": str(block_key).split('@')[-1]
-            }
+                # Iterate over the dictionary and store key-value pairs after "source_file", depending of the block type
+                fields = block.fields
+                found_source_file = False
+                for key in fields.keys():
+                    if found_source_file:
+                        block_item[key] = block.fields[key].read_from(block)
+                    if key == "source_file":
+                        found_source_file = True
 
-            # Iterate over the dictionary and store key-value pairs after "source_file", depending of the block type
-            fields = block.fields
-            found_source_file = False
-            for key in fields.keys():
-                if found_source_file:
-                    block_item[key] = block.fields[key].read_from(block)
-                if key == "source_file":
-                    found_source_file = True
+                # Add students data
+                generated_report_data = defaultdict(list)
+                if hasattr(block, 'generate_report_data'):
+                    try:
+                        user_state_iterator = user_state_client.iter_all_for_block(block_key)
+                        for username, state in block.generate_report_data(user_state_iterator, max_count):
+                            generated_report_data[username].append(state)
+                    except NotImplementedError:
+                        pass
+                responses = []
+                for response in list_problem_responses(course_key, block_key, max_count):
+                    user_states = generated_report_data.get(response['username'])
+                    if user_states:
+                        for user_state in user_states:
+                            user_response = response.copy()
+                            user_response.update(user_state)
+                            responses.append(user_response)
+                    else:
+                        responses.append(response)
+                    response_count += 1
+                block_item["responses"] = responses
 
-            # Add students data
-            generated_report_data = defaultdict(list)
-            if hasattr(block, 'generate_report_data'):
-                try:
-                    user_state_iterator = user_state_client.iter_all_for_block(block_key)
-                    for username, state in block.generate_report_data(user_state_iterator, max_count):
-                        generated_report_data[username].append(state)
-                except NotImplementedError:
-                    pass
-            responses = []
-            for response in list_problem_responses(course_key, block_key, max_count):
-                user_states = generated_report_data.get(response['username'])
-                if user_states:
-                    for user_state in user_states:
-                        user_response = response.copy()
-                        user_response.update(user_state)
-                        responses.append(user_response)
-                else:
-                    responses.append(response)
-                response_count += 1
-            block_item["responses"] = responses
-
-            # Append the block data to the list
-            blocks_data.append(block_item)
-            block_count += 1
+                # Append the block data to the list
+                blocks_data.append(block_item)
+                block_count += 1
 
         index = len(reports) + 1
         reports.append(upload_json_to_report_store(blocks_data, 'report_data_' + str(index), course_key, start_date))
