@@ -94,10 +94,9 @@ class CMMEduSeguimientoGetReport(APIView):
             task_output = json.loads(latest_task.task_output)
             logger.info("Task output: %s", task_output)
             try:
-                report_names = task_output.get('reports')
-                student_profile_report_name = report_names.get('student_profile')
-                ora_report_name = report_names.get('ora_data')
-                block_report_names = report_names.get('blocks_data')
+                report_names = [task_output['course_key'] + "_" + "report_data_" + str(i+1) + "_" + task_output["timestamp"] + ".tar.gz" for i in range(task_output['n_reports'])]
+                student_profile_report_name = task_output['course_key'] + "_student_profile_" + task_output["timestamp"] + ".tar.gz"
+                ora_report_name = task_output['course_key'] + "_ora_data_" + task_output["timestamp"] + ".tar.gz"
             except:
                 return JsonResponse({"status": 0, "msg": "Formato de output de tarea inválido."})
             report_store = JsonReportStore.from_config(config_name='GRADES_DOWNLOAD')
@@ -115,7 +114,7 @@ class CMMEduSeguimientoGetReport(APIView):
                     output['student_profile'] = url
                 elif name == ora_report_name:
                     output['ora_data'] = url
-                elif name in block_report_names:
+                elif name in report_names:
                     output['blocks_data'][name.split("report_data_")[1].split("_")[0]] = url
             return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "output": output})
         else:

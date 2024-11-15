@@ -85,11 +85,9 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
 
     current_step = {
         'step': 'Report ready.',
-        'reports': {
-            'student_profile': student_profile_report_name,
-            'ora_data': ora_report_name,
-            'blocks_data': report_names
-        }
+        'course_key': student_profile_report_name.split("_student_profile")[0],
+        'timestamp': student_profile_report_name.split("_")[-1].split(".")[0],
+        'n_reports': len(report_names)
     }
 
     return task_progress.update_task_state(extra_meta=current_step)
