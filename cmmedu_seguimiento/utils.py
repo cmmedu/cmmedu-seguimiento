@@ -161,6 +161,8 @@ def build_blocks_data(user_id, course_key, usage_key_str, start_date):
                             generated_report_data[username].append(state)
                     except NotImplementedError:
                         pass
+                    except:
+                        logger.warning("Error generating report data for block %s using custom function.", block_key, exc_info=sys.exc_info())
                 responses = []
                 for response in list_problem_responses(course_key, block_key, max_count):
                     user_states = generated_report_data.get(response['username'])
