@@ -1,9 +1,11 @@
 from django.db import transaction
 from django.http import HttpResponseBadRequest, JsonResponse
+from django.http.response import Http404
 from edx_rest_framework_extensions import permissions
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
 from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser
 import json
+from lms.djangoapps.courseware.courses import get_course_by_id
 from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
 from lms.djangoapps.instructor_task.models import InstructorTask
 import logging
@@ -45,7 +47,10 @@ class CMMEduSeguimientoMakeReport(APIView):
             return HttpResponseBadRequest("Missing course_key")
         try:
             _ = CourseKey.from_string(course_key)
+            __ = get_course_by_id(_)
         except InvalidKeyError:
+            return HttpResponseBadRequest("Invalid course_key")
+        except Http404:
             return HttpResponseBadRequest("Invalid course_key")
         task_input = {
             'user_id': request.user.pk
@@ -77,7 +82,10 @@ class CMMEduSeguimientoGetReport(APIView):
             return HttpResponseBadRequest("Missing course_key")
         try:
             key = CourseKey.from_string(course_key)
+            _ = get_course_by_id(key)
         except InvalidKeyError:
+            return HttpResponseBadRequest("Invalid course_key")
+        except Http404:
             return HttpResponseBadRequest("Invalid course_key")
         course_tasks = InstructorTask.objects.filter(
             task_type='cmmedu_seguimiento_report',
