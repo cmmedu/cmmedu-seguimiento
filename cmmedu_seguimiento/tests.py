@@ -28,7 +28,7 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
         self.auth_client.login(username='testuser3', password='12345')
 
         # Create a course
-        self.course1 = CourseFactory.create(org='mss', course='100', display_name='Sample course 1')
+        self.course1 = CourseFactory.create(org='mss', course='100', run='2020', display_name='Sample course 1')
 
         # Now give it some content
         with self.store.bulk_operations(self.course1.id, emit_signals=False):
