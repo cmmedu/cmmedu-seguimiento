@@ -143,6 +143,18 @@ class DjangoStorageJsonReportStore(JsonReportStore):
             for filename, full_path in files
         ]
 
+    def links_for_names(self, course_id, filenames):
+        """
+        For a given course_id and list of filenames, return a list of
+        (filename, url) tuples for those files only. Does not list the
+        directory or call get_modified_time(), so it avoids N HEAD requests
+        when using remote storage (S3).
+        """
+        return [
+            (name, self.storage.url(self.path_to(course_id, name)))
+            for name in filenames
+        ]
+
     def path_to(self, course_id, filename=''):
         """
         Return the full path to a given file for a given course.

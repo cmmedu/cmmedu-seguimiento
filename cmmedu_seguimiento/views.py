@@ -108,22 +108,20 @@ class CMMEduSeguimientoGetReport(APIView):
             except:
                 return JsonResponse({"status": 0, "msg": "Formato de output de tarea inválido."})
             report_store = JsonReportStore.from_config(config_name='GRADES_DOWNLOAD')
+            desired_filenames = [student_profile_report_name, ora_report_name] + report_names
+            name_to_url = dict(report_store.links_for_names(key, desired_filenames))
             output = {
-                'student_profile': None,
-                'ora_data': None,
-                'blocks_data': {},
+                'student_profile': name_to_url.get(student_profile_report_name),
+                'ora_data': name_to_url.get(ora_report_name),
+                'blocks_data': {
+                    name.split("report_data_")[1].split("_")[0]: name_to_url[name]
+                    for name in report_names if name in name_to_url
+                },
                 'task_id': latest_task.task_id,
                 'task_started': latest_task.created.isoformat(),
                 'task_finished': latest_task.updated.isoformat(),
                 'task_duration_seconds': (latest_task.updated - latest_task.created).total_seconds()
             }
-            for name, url in report_store.links_for(key):
-                if name == student_profile_report_name:
-                    output['student_profile'] = url
-                elif name == ora_report_name:
-                    output['ora_data'] = url
-                elif name in report_names:
-                    output['blocks_data'][name.split("report_data_")[1].split("_")[0]] = url
             return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "output": output})
         else:
             return JsonResponse({"status": 0, "msg": "Estado de la tarea desconocido.", "task_state": latest_task.task_state})
