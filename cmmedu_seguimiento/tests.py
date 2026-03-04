@@ -27,8 +27,10 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
             is_staff=True)
         self.auth_client.login(username='testuser3', password='12345')
 
-        # Create a course
+        # Create courses
         self.course1 = CourseFactory.create(org='mss', course='100', run='2020', display_name='Sample course 1')
+        self.course2 = CourseFactory.create(org='mss', course='101', run='2020', display_name='Sample course 2')
+        self.course3 = CourseFactory.create(org='mss', course='102', run='2020', display_name='Sample course 3')
 
         # Now give it some content
         with self.store.bulk_operations(self.course1.id, emit_signals=False):
@@ -94,18 +96,6 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
         self.assertEqual(response.content, b'Invalid course_key')
 
 
-    def test_task_created(self):
-        """
-        Test that a task is created when the course key is valid.
-        """
-        response = self.auth_client.post(reverse('cmmedu_seguimiento:cmmedu_seguimiento_make_report'), content_type="application/json", data={"course_key": "course-v1:mss+100+2020"})
-        self.assertEqual(response.status_code, 200)
-        response_json = response.json()
-        self.assertEqual(response_json['status'], 1)
-        self.assertEqual(response_json['msg'], 'Se ha iniciado la generación del reporte.')
-        self.assertIn('task_id', response_json)
-
-
     def test_get_report_no_course_key(self):
         """
         Test that no report is returned if the course key is missing.
@@ -128,7 +118,11 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
         """
         Test that no report is returned if no task has been created.
         """
-        response = self.auth_client.post(reverse('cmmedu_seguimiento:cmmedu_seguimiento_get_report'), content_type="application/json", data={"course_key": "course-v1:mss+100+2020"})
+        response = self.auth_client.post(
+            reverse('cmmedu_seguimiento:cmmedu_seguimiento_get_report'),
+            content_type="application/json",
+            data='{"course_key": "%s"}' % str(self.course2.id),
+        )
         self.assertEqual(response.status_code, 200)
         response_json = response.json()
         self.assertEqual(response_json['status'], 0)
@@ -139,10 +133,13 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
         """
         Test that a task is created when the course key is valid.
         """
-        response1 = self.auth_client.post(reverse('cmmedu_seguimiento:cmmedu_seguimiento_make_report'), content_type="application/json", data={"course_key": "course-v1:mss+100+2020"})
+        response1 = self.auth_client.post(
+            reverse('cmmedu_seguimiento:cmmedu_seguimiento_make_report'),
+            content_type="application/json",
+            data='{"course_key": "%s"}' % str(self.course1.id),
+        )
         self.assertEqual(response1.status_code, 200)
         response1_json = response1.json()
         self.assertEqual(response1_json['status'], 1)
         self.assertEqual(response1_json['msg'], 'Se ha iniciado la generación del reporte.')
         self.assertIn('task_id', response1_json)
-
