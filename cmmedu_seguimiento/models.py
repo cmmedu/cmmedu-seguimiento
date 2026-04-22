@@ -112,8 +112,8 @@ class DjangoStorageJsonReportStore(JsonReportStore):
         Given a course_id, filename, and data (a Python dict or list),
         write the data to the storage backend in JSON format inside a `.tar.gz` file.
         """
-        json_data = json.dumps(data, ensure_ascii=False, indent=4, cls=JsonReportEncoder)
-        self.store(course_id, filename, json_data.encode('utf-8'))
+        json_bytes = json.dumps(data, ensure_ascii=False, indent=4, cls=JsonReportEncoder).encode('utf-8')
+        self.store(course_id, filename, json_bytes)
 
     def links_for(self, course_id):
         """
