@@ -1,14 +1,15 @@
 from collections import defaultdict
 from common.djangoapps.student.models import CourseEnrollment
 from common.djangoapps.util.file import course_filename_prefix_generator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from eventtracking import tracker
+import json
 from lms.djangoapps.course_blocks.api import get_course_blocks
 from lms.djangoapps.courseware.courses import get_course_by_id
 from lms.djangoapps.courseware.models import StudentModule
-from lms.djangoapps.courseware.user_state_client import DjangoXBlockUserStateClient
 from lms.djangoapps.instructor_analytics.basic import enrolled_students_features, get_response_state
 from lms.djangoapps.instructor_task.tasks_helper.runner import TaskProgress
 import logging
@@ -33,7 +34,7 @@ REPORT_REQUESTED_EVENT_NAME = u'edx.instructor.report.requested'
 def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
     """
     For a given `course_id`, generate a JSON file containing profile
-    information, ORA data, blocks data and student state for all students 
+    information, ORA data, blocks data and student state for all students
     that are enrolled, and store using a `JsonReportStore`.
     """
     start_time = time()
@@ -93,96 +94,143 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     return task_progress.update_task_state(extra_meta=current_step)
 
 
+def _iter_user_states(sm_records):
+    """Yield (username, state_dict) from already-fetched StudentModule records."""
+    for sm in sm_records:
+        try:
+            state = json.loads(sm.state) if sm.state else {}
+        except (json.JSONDecodeError, TypeError):
+            state = {}
+        yield sm.student.username, state
+
+
 def build_blocks_data(user_id, course_key, usage_key_str, start_date):
     usage_key = UsageKey.from_string(usage_key_str).map_into_course(course_key)
     user = get_user_model().objects.get(pk=user_id)
     store = modulestore()
-    user_state_client = DjangoXBlockUserStateClient()
     max_count = settings.FEATURES.get('MAX_PROBLEM_RESPONSES_COUNT')
+
     with store.bulk_operations(course_key):
         course_blocks = get_course_blocks(user, usage_key)
+
+        # Pass 1: group blocks by section, preserving traversal order
+        sections = []
         current_section = ""
-        block_count = 0
-        response_count = 0
-        reports = []
-        blocks_data = []
+        current_items = []
         for title, path, block_key in build_problem_list(course_blocks, usage_key):
             if len(path) < 2:
                 continue
             new_section = path[1]
             if new_section != current_section:
-                if current_section != "":
-                    index = len(reports) + 1
-                    reports.append(upload_json_to_report_store(blocks_data, 'report_data_' + str(index), course_key, start_date))
-                    blocks_data = []
-                    logger.info("Stored %d blocks with %d responses for section %s.", block_count, response_count, current_section)
-                    block_count = 0
-                    response_count = 0
+                if current_section:
+                    sections.append((current_section, current_items))
+                    current_items = []
                 current_section = new_section
-            if block_key.block_type in ('sequential', 'chapter', 'vertical'):
-                block_item = {
-                    "path": path,
-                    "block_type": block_key.block_type,
-                    "block_id": str(block_key).split('@')[-1],
-                    "is_structural_item": True
-                }
-                blocks_data.append(block_item)
-                continue
-            elif block_key.block_type == 'course':
-                continue
-            else:
-                
-                # Store basic data from the block
-                block = store.get_item(block_key)
-                block_item = {
-                    "title": title,
-                    "path": path,
-                    "display_name": block.display_name,
-                    "block_type": block_key.block_type,
-                    "block_id": str(block_key).split('@')[-1],
-                    "is_structural_item": False
-                }
+            current_items.append((title, path, block_key))
+        if current_items:
+            sections.append((current_section, current_items))
 
-                # Iterate over the dictionary and store key-value pairs after "source_file", depending of the block type
-                fields = block.fields
-                found_source_file = False
-                for key in fields.keys():
-                    if found_source_file:
-                        block_item[key] = block.fields[key].read_from(block)
-                    if key == "source_file":
-                        found_source_file = True
+        reports = []
+        pending_future = None
 
-                # Add students data
-                generated_report_data = defaultdict(list)
-                if hasattr(block, 'generate_report_data'):
-                    try:
-                        user_state_iterator = user_state_client.iter_all_for_block(block_key)
-                        for username, state in block.generate_report_data(user_state_iterator, max_count):
-                            generated_report_data[username].append(state)
-                    except NotImplementedError:
-                        pass
-                    except:
-                        logger.warning("Error generating report data for block %s using custom function.", block_key, exc_info=sys.exc_info())
-                responses = []
-                for response in list_problem_responses(course_key, block_key, max_count):
-                    user_states = generated_report_data.get(response['username'])
-                    if user_states:
-                        for user_state in user_states:
-                            user_response = response.copy()
-                            user_response.update(user_state)
-                            responses.append(user_response)
-                    else:
-                        responses.append(response)
-                    response_count += 1
-                block_item["responses"] = responses
+        with ThreadPoolExecutor(max_workers=1) as upload_executor:
+            for section_name, section_items in sections:
+                # Batch fetch all StudentModule records for this section in one query
+                section_block_keys = [bk for _, _, bk in section_items]
+                sm_by_block = defaultdict(list)
+                for sm in StudentModule.objects.filter(
+                    course_id=course_key,
+                    module_state_key__in=section_block_keys,
+                ).select_related('student').order_by('student'):
+                    sm_by_block[sm.module_state_key].append(sm)
 
-                # Append the block data to the list
-                blocks_data.append(block_item)
-                block_count += 1
+                blocks_data = []
+                block_count = 0
+                response_count = 0
 
-        index = len(reports) + 1
-        reports.append(upload_json_to_report_store(blocks_data, 'report_data_' + str(index), course_key, start_date))
-        logger.info("Stored %d blocks with %d responses for section %s.", block_count, response_count, current_section)
+                for title, path, block_key in section_items:
+                    if block_key.block_type == 'course':
+                        continue
+                    if block_key.block_type in ('sequential', 'chapter', 'vertical'):
+                        blocks_data.append({
+                            "path": path,
+                            "block_type": block_key.block_type,
+                            "block_id": str(block_key).split('@')[-1],
+                            "is_structural_item": True,
+                        })
+                        continue
+
+                    block = store.get_item(block_key)
+                    block_item = {
+                        "title": title,
+                        "path": path,
+                        "display_name": block.display_name,
+                        "block_type": block_key.block_type,
+                        "block_id": str(block_key).split('@')[-1],
+                        "is_structural_item": False,
+                    }
+
+                    found_source_file = False
+                    for key in block.fields.keys():
+                        if found_source_file:
+                            block_item[key] = block.fields[key].read_from(block)
+                        if key == "source_file":
+                            found_source_file = True
+
+                    sm_records = sm_by_block.get(block_key, [])
+                    if max_count:
+                        sm_records = sm_records[:max_count]
+
+                    generated_report_data = defaultdict(list)
+                    if hasattr(block, 'generate_report_data'):
+                        try:
+                            for username, state in block.generate_report_data(_iter_user_states(sm_records), max_count):
+                                generated_report_data[username].append(state)
+                        except NotImplementedError:
+                            pass
+                        except Exception:
+                            logger.warning("Error generating report data for block %s.", block_key, exc_info=sys.exc_info())
+
+                    responses = []
+                    for sm in sm_records:
+                        username = sm.student.username
+                        base_response = {
+                            'username': username,
+                            'timestamp': sm.created,
+                            'state': get_response_state(sm),
+                        }
+                        user_states = generated_report_data.get(username)
+                        if user_states:
+                            for user_state in user_states:
+                                r = base_response.copy()
+                                r.update(user_state)
+                                responses.append(r)
+                        else:
+                            responses.append(base_response)
+                        response_count += 1
+
+                    block_item["responses"] = responses
+                    blocks_data.append(block_item)
+                    block_count += 1
+
+                # Wait for the previous section's upload before submitting this one
+                # (keeps at most one section's data in-flight, bounding peak RAM)
+                if pending_future is not None:
+                    reports.append(pending_future.result())
+
+                index = len(reports) + 1
+                pending_future = upload_executor.submit(
+                    upload_json_to_report_store,
+                    blocks_data,
+                    'report_data_' + str(index),
+                    course_key,
+                    start_date,
+                )
+                blocks_data = []
+                logger.info("Queued upload for section %s: %d blocks, %d responses.", section_name, block_count, response_count)
+
+            if pending_future is not None:
+                reports.append(pending_future.result())
 
     return reports
 
