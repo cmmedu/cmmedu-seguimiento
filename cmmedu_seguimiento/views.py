@@ -125,3 +125,63 @@ class CMMEduSeguimientoGetReport(APIView):
             return JsonResponse({"status": 1, "msg": "Reporte encontrado.", "course_key": course_key, "output": output})
         else:
             return JsonResponse({"status": 0, "msg": "Estado de la tarea desconocido.", "task_state": latest_task.task_state})
+
+
+class CMMEduSeguimientoDeleteReport(APIView):
+
+    authentication_classes = (
+        JwtAuthentication,
+        BearerAuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )
+
+    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS,)
+
+    def post(self, request):
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest("Invalid JSON")
+        course_key = data.get('course_key')
+        if not course_key:
+            return HttpResponseBadRequest("Missing course_key")
+        try:
+            _ = CourseKey.from_string(course_key)
+            __ = get_course_by_id(_)
+        except InvalidKeyError:
+            return HttpResponseBadRequest("Invalid course_key")
+        except Http404:
+            return HttpResponseBadRequest("Invalid course_key")
+
+        course_tasks = InstructorTask.objects.filter(
+            task_type='cmmedu_seguimiento_report',
+            course_id=course_key
+        ).order_by('-created').all()
+        if not course_tasks:
+            return JsonResponse({"status": 0, "msg": "No hay tareas de reportes asociadas a este curso."})
+
+        report_store = JsonReportStore.from_config(config_name='GRADES_DOWNLOAD')
+        deleted_files = []
+
+        for task in course_tasks:
+            if task.task_state != 'SUCCESS' or not task.task_output:
+                continue
+            try:
+                task_output = json.loads(task.task_output)
+                report_names = [
+                    task_output['course_key'] + "_report_data_" + str(i + 1) + "_" + task_output["timestamp"] + ".tar.gz"
+                    for i in range(task_output['n_reports'])
+                ]
+                all_names = [
+                    task_output['course_key'] + "_student_profile_" + task_output["timestamp"] + ".tar.gz",
+                    task_output['course_key'] + "_ora_data_" + task_output["timestamp"] + ".tar.gz",
+                ] + report_names
+                for name in all_names:
+                    path = report_store.path_to(_, name)
+                    if report_store.storage.exists(path):
+                        report_store.storage.delete(path)
+                        deleted_files.append(name)
+            except Exception as e:
+                logger.error("Error deleting report files for task %s: %s", task.task_id, e)
+
+        return JsonResponse({"status": 1, "msg": "Reportes eliminados.", "deleted_files": deleted_files})
