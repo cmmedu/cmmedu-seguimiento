@@ -20,6 +20,9 @@ class JsonReportEncoder(json.JSONEncoder):
             return str(obj)
         if isinstance(obj, datetime):
             return obj.isoformat()
+        # Block locator types (BlockUsageLocator, etc.) are stringified as their key
+        if hasattr(obj, 'to_deprecated_string'):
+            return str(obj)
         return super().default(obj)
     
 

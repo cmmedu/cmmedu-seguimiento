@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from common.djangoapps.student.models import CourseEnrollment
 from common.djangoapps.util.file import course_filename_prefix_generator
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +29,8 @@ from .models import JsonReportStore
 logger = logging.getLogger(__name__)
 
 REPORT_REQUESTED_EVENT_NAME = u'edx.instructor.report.requested'
+
+UserState = namedtuple('UserState', ['username', 'state'])
 
 
 def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
@@ -95,13 +97,17 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
 
 
 def _iter_user_states(sm_records):
-    """Yield (username, state_dict) from already-fetched StudentModule records."""
+    """Yield UserState namedtuples from already-fetched StudentModule records.
+
+    capa_module.generate_report_data accesses user_state.state as an attribute,
+    so plain tuples don't work here.
+    """
     for sm in sm_records:
         try:
             state = json.loads(sm.state) if sm.state else {}
         except (json.JSONDecodeError, TypeError):
             state = {}
-        yield sm.student.username, state
+        yield UserState(username=sm.student.username, state=state)
 
 
 def build_blocks_data(user_id, course_key, usage_key_str, start_date):
