@@ -43,7 +43,8 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     start_date = datetime.now(UTC)
 
     enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id)
-    problem_locations = "block-v1:{}+type@course+block@course".format(course_id)
+    course = get_course_by_id(course_id)
+    problem_locations = str(course.location)
     task_progress = TaskProgress(action_name, enrolled_students.count(), start_time)
 
     current_step = {'step': 'Generating report data...'}
@@ -51,7 +52,6 @@ def make_report(_xmodule_instance_args, _entry_id, course_id, task_input, action
     logger.info("Started data generation for course %s.", course_id)
 
     # Student profile
-    course = get_course_by_id(course_id)
     query_features = list(configuration_helpers.get_value('student_profile_download_fields', []))
     if not query_features:
         query_features = [
