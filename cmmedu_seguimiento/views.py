@@ -2,6 +2,7 @@ from django.db import transaction
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.http.response import Http404
 from edx_rest_framework_extensions import permissions
+from rest_framework.permissions import IsAdminUser
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
 from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser
 import json
@@ -29,7 +30,7 @@ class CMMEduSeguimientoMakeReport(APIView):
         SessionAuthenticationAllowInactiveUser,
     )
 
-    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS,)
+    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS, IsAdminUser)
 
 
     @transaction.non_atomic_requests
@@ -70,7 +71,7 @@ class CMMEduSeguimientoGetReport(APIView):
         SessionAuthenticationAllowInactiveUser,
     )
 
-    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS,)
+    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS, IsAdminUser)
 
     def post(self, request):
         try:
@@ -135,7 +136,7 @@ class CMMEduSeguimientoDeleteReport(APIView):
         SessionAuthenticationAllowInactiveUser,
     )
 
-    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS,)
+    permission_classes = (permissions.JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS, IsAdminUser)
 
     def post(self, request):
         try:

@@ -101,6 +101,23 @@ class TestCMMEduSeguimiento(ModuleStoreTestCase):
         self.assertEqual(response2.status_code, 401)
 
 
+    def test_endpoints_require_staff(self):
+        """
+        A logged-in non-staff user must get 403, even with ?username=<self>
+        (which satisfies IsUserInUrl inside JWT_RESTRICTED_APPLICATION_OR_USER_ACCESS).
+        """
+        UserFactory(username='learner', password='12345', email='learner@edx.org', is_staff=False)
+        learner_client = Client()
+        learner_client.login(username='learner', password='12345')
+        payload = json.dumps({'course_key': str(self.course1.id)})
+        for name in ('cmmedu_seguimiento_make_report', 'cmmedu_seguimiento_get_report', 'cmmedu_seguimiento_delete_report'):
+            response = learner_client.post(
+                reverse('cmmedu_seguimiento:%s' % name) + '?username=learner',
+                content_type='application/json', data=payload,
+            )
+            self.assertEqual(response.status_code, 403, 'endpoint %s allowed a non-staff user' % name)
+
+
     def test_no_task_created_if_not_course_key(self):
         """
         Test that no task is created if the course key is missing.
